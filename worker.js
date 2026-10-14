@@ -31,7 +31,47 @@ export default {
       );
     }
 
-    // ===== Tikriname DEEPL_KEY =====
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    // ============================================================
+    // /vision - Google Cloud Vision API (OCR)
+    // ============================================================
+    if (path === "/vision" || path === "/vision/") {
+      if (!env.GOOGLE_VISION_KEY) {
+        return new Response(
+          JSON.stringify({ error: "Server configuration error: GOOGLE_VISION_KEY missing" }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      try {
+        const body = await request.text();
+        const visionRes = await fetch(
+          `https://vision.googleapis.com/v1/images:annotate?key=${env.GOOGLE_VISION_KEY}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: body
+          }
+        );
+
+        const responseText = await visionRes.text();
+        return new Response(responseText, {
+          status: visionRes.status,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      } catch (error) {
+        return new Response(
+          JSON.stringify({ error: "Vision API nepasiekiama", details: error.message }),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // ============================================================
+    // / (root) - DeepL vertimas
+    // ============================================================
     if (!env.DEEPL_KEY) {
       return new Response(
         JSON.stringify({ error: "Server configuration error: DEEPL_KEY missing" }),
@@ -39,35 +79,22 @@ export default {
       );
     }
 
-    // ===== Nuskaitome kūną =====
-    let requestBody;
     try {
-      requestBody = await request.text();
-    } catch (e) {
-      return new Response(
-        JSON.stringify({ error: "Invalid request body" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // ===== Persiunčiame į DeepL =====
-    try {
+      const body = await request.text();
       const deeplResponse = await fetch("https://api-free.deepl.com/v2/translate", {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
           "Authorization": `DeepL-Auth-Key ${env.DEEPL_KEY}`
         },
-        body: requestBody
+        body: body
       });
 
       const responseText = await deeplResponse.text();
-
       return new Response(responseText, {
         status: deeplResponse.status,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
-
     } catch (error) {
       return new Response(
         JSON.stringify({ error: "Vertimo paslauga laikinai nepasiekiama", details: error.message }),
