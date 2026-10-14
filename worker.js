@@ -38,22 +38,19 @@ export default {
     }
 
     // ============================================================
-    // RATE LIMITING - naudojame Cloudflare KV (jei nustatytas) arba
-    // in-memory fallback
+    // RATE LIMITING - 5 užklausos per 1 minutę
     // ============================================================
     const clientIp = request.headers.get("CF-Connecting-IP") || "unknown";
     const now = Date.now();
     
-    // Jei turite KV namespace - naudojame jį (išlieka tarp instance)
-    // Kitu atveju naudojame in-memory (veikia tik tame pačiame Worker instance)
     let rateLimitOk = true;
     let remaining = 0;
     
     try {
       if (env.RATE_LIMIT_KV) {
-        // === KV-based rate limiting (rekomenduojama produkcijai) ===
-        const windowSec = 60; // 1 minutės langas
-        const maxRequests = 30; // 30 užklausų per minutę
+        // === KV-based rate limiting ===
+        const windowSec = 60;    // ⏱️ 1 minutė
+        const maxRequests = 5;   // 🚦 5 užklausos
         
         const key = `rl:${clientIp}:${Math.floor(now / 1000 / windowSec)}`;
         const current = await env.RATE_LIMIT_KV.get(key);
@@ -66,13 +63,13 @@ export default {
           remaining = maxRequests - count - 1;
         }
       } else {
-        // === In-memory fallback (veikia tik viename instance) ===
+        // === In-memory fallback ===
         if (!globalThis.__rateLimitMap) {
           globalThis.__rateLimitMap = new Map();
         }
         const map = globalThis.__rateLimitMap;
-        const windowMs = 60000;
-        const maxRequests = 30;
+        const windowMs = 60000;  // ⏱️ 1 minutė (milisekundėmis)
+        const maxRequests = 5;   // 🚦 5 užklausos
         
         let timestamps = map.get(clientIp) || [];
         timestamps = timestamps.filter(t => now - t < windowMs);
@@ -101,7 +98,7 @@ export default {
     
     if (!rateLimitOk) {
       return new Response(
-        JSON.stringify({ error: "Per daug užklausų. Palaukite minutę ir bandykite dar kartą." }),
+        JSON.stringify({ error: "Per daug užklausų. Palaukite 1 minutę ir bandykite dar kartą." }),
         { 
           status: 429, 
           headers: { 
