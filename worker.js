@@ -49,8 +49,8 @@ export default {
     try {
       if (env.RATE_LIMIT_KV) {
         // === KV-based rate limiting ===
-        const windowSec = 60;    // ⏱️ 1 minutė
-        const maxRequests = 5;   // 🚦 5 užklausos
+        const windowSec = 60;
+        const maxRequests = 5;
         
         const key = `rl:${clientIp}:${Math.floor(now / 1000 / windowSec)}`;
         const current = await env.RATE_LIMIT_KV.get(key);
@@ -68,8 +68,8 @@ export default {
           globalThis.__rateLimitMap = new Map();
         }
         const map = globalThis.__rateLimitMap;
-        const windowMs = 60000;  // ⏱️ 1 minutė (milisekundėmis)
-        const maxRequests = 5;   // 🚦 5 užklausos
+        const windowMs = 60000;
+        const maxRequests = 5;
         
         let timestamps = map.get(clientIp) || [];
         timestamps = timestamps.filter(t => now - t < windowMs);
@@ -82,7 +82,6 @@ export default {
           remaining = maxRequests - timestamps.length;
         }
         
-        // Valome senus įrašus
         if (map.size > 1000) {
           for (const [ip, times] of map.entries()) {
             const fresh = times.filter(t => now - t < windowMs);
@@ -92,13 +91,12 @@ export default {
         }
       }
     } catch (e) {
-      // Jei rate limiting sugenda - leidžiame užklausą (kad neblokuotų viso)
       console.error("Rate limit error:", e);
     }
     
     if (!rateLimitOk) {
       return new Response(
-        JSON.stringify({ error: "Per daug užklausų. Palaukite 1 minutę ir bandykite dar kartą." }),
+        JSON.stringify({ error: "Per daug užklausų. Palaukite 1 minutę." }),
         { 
           status: 429, 
           headers: { 
@@ -122,7 +120,11 @@ export default {
     if (path === "/vision" || path === "/vision/") {
       if (!env.GOOGLE_VISION_KEY) {
         return new Response(
-          JSON.stringify({ error: "Server configuration error: GOOGLE_VISION_KEY missing" }),
+          JSON.stringify({ 
+            error: "Server configuration error: GOOGLE_VISION_KEY missing",
+            hint: "Secret not set in Cloudflare Workers Settings",
+            fix: "Cloudflare Dashboard → deepl-proxy → Settings → Variables and Secrets → Add Secret named GOOGLE_VISION_KEY"
+          }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -130,7 +132,6 @@ export default {
       try {
         const body = await request.text();
         
-        // Saugumo patikra: apribojame užklausos dydį iki 10 MB
         if (body.length > 10 * 1024 * 1024) {
           return new Response(
             JSON.stringify({ error: "Užklausa per didelė (max 10MB)" }),
@@ -148,6 +149,35 @@ export default {
         );
 
         const responseText = await visionRes.text();
+        
+        // 🔍 DIAGNOSTIKA: jei Google grąžina klaidą - parodykime TIKRĄ priežastį
+        if (!visionRes.ok) {
+          let parsedError = null;
+          try {
+            const parsed = JSON.parse(responseText);
+            if (parsed.error) {
+              parsedError = {
+                code: parsed.error.code,
+                message: parsed.error.message,
+                status: parsed.error.status
+              };
+            }
+          } catch (e) {
+            parsedError = { raw: responseText.substring(0, 500) };
+          }
+          
+          return new Response(
+            JSON.stringify({ 
+              error: "Google Vision API klaida",
+              httpStatus: visionRes.status,
+              googleError: parsedError,
+              keyPresent: !!env.GOOGLE_VISION_KEY,
+              keyPrefix: env.GOOGLE_VISION_KEY ? env.GOOGLE_VISION_KEY.substring(0, 10) + "..." : "MISSING"
+            }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        
         return new Response(responseText, {
           status: visionRes.status,
           headers: { 
@@ -158,7 +188,11 @@ export default {
         });
       } catch (error) {
         return new Response(
-          JSON.stringify({ error: "Vision API nepasiekiama", details: error.message }),
+          JSON.stringify({ 
+            error: "Vision API nepasiekiama", 
+            details: error.message,
+            type: error.name
+          }),
           { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -169,7 +203,10 @@ export default {
     // ============================================================
     if (!env.DEEPL_KEY) {
       return new Response(
-        JSON.stringify({ error: "Server configuration error: DEEPL_KEY missing" }),
+        JSON.stringify({ 
+          error: "Server configuration error: DEEPL_KEY missing",
+          hint: "Secret not set in Cloudflare Workers Settings"
+        }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -177,7 +214,6 @@ export default {
     try {
       const body = await request.text();
       
-      // Saugumo patikra: apribojame teksto ilgį iki 500 KB
       if (body.length > 500 * 1024) {
         return new Response(
           JSON.stringify({ error: "Tekstas per ilgas (max 500KB)" }),
@@ -195,6 +231,25 @@ export default {
       });
 
       const responseText = await deeplResponse.text();
+      
+      if (!deeplResponse.ok) {
+        let parsedError = null;
+        try {
+          parsedError = JSON.parse(responseText);
+        } catch (e) {
+          parsedError = { raw: responseText.substring(0, 500) };
+        }
+        
+        return new Response(
+          JSON.stringify({ 
+            error: "DeepL API klaida",
+            httpStatus: deeplResponse.status,
+            deeplError: parsedError
+          }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
       return new Response(responseText, {
         status: deeplResponse.status,
         headers: { 
@@ -205,7 +260,10 @@ export default {
       });
     } catch (error) {
       return new Response(
-        JSON.stringify({ error: "Vertimo paslauga laikinai nepasiekiama", details: error.message }),
+        JSON.stringify({ 
+          error: "Vertimo paslauga laikinai nepasiekiama", 
+          details: error.message 
+        }),
         { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
